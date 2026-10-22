@@ -554,10 +554,11 @@ static int on_chr(uint16_t ch, const struct ble_gatt_error *e, const struct ble_
         uint16_t u = ble_uuid_u16(&c->uuid.u);
         ESP_LOGI(TAG, "chr uuid %04X handle %u props %02X", u, c->val_handle, c->properties);
         if (u == 0x2A4B) s_map_handle = c->val_handle;
-        else if (u == 0x2A4D && s_nrch < MAX_RCHARS && (c->properties & BLE_GATT_CHR_PROP_NOTIFY)) {
+        else if (u == 0x2A4D && s_nrch < MAX_RCHARS) {
+            /* keep every report characteristic (output ones too) so descriptors map to the right one */
             memset(&s_rch[s_nrch], 0, sizeof(rchar_t));
             s_rch[s_nrch].val_handle = c->val_handle;
-            s_rch[s_nrch].notify = true;     /* assume input until the report reference says otherwise */
+            s_rch[s_nrch].notify = (c->properties & BLE_GATT_CHR_PROP_NOTIFY) != 0;
             s_nrch++;
         }
     } else if (e->status == BLE_HS_EDONE) { s_step++; gatt_next(); }
@@ -570,10 +571,14 @@ static int on_dsc(uint16_t ch, const struct ble_gatt_error *e, uint16_t chr_val,
     if (e->status == 0 && d) {
         uint16_t u = ble_uuid_u16(&d->uuid.u);
         ESP_LOGI(TAG, "dsc %04X handle %u (chr %u)", u, d->handle, chr_val);
-        for (int i = 0; i < s_nrch; i++) {
-            if (s_rch[i].val_handle != chr_val) continue;
-            if (u == 0x2902) s_rch[i].cccd_handle = d->handle;
-            if (u == 0x2908) s_rch[i].rref_handle = d->handle;
+        /* descriptors were discovered over the whole service range, so chr_val is just the
+         * range start: belong to the report characteristic with the highest value handle below */
+        int own = -1;
+        for (int i = 0; i < s_nrch; i++)
+            if (s_rch[i].val_handle < d->handle && (own < 0 || s_rch[i].val_handle > s_rch[own].val_handle)) own = i;
+        if (own >= 0) {
+            if (u == 0x2902) s_rch[own].cccd_handle = d->handle;
+            if (u == 0x2908) s_rch[own].rref_handle = d->handle;
         }
     } else if (e->status == BLE_HS_EDONE) { s_step++; gatt_next(); }
     else set_status("descriptor discovery failed (%d)", e->status);
