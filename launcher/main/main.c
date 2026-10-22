@@ -490,6 +490,7 @@
     if(ext_eq(ext, "sfc")) return 10;  /* ota_10: snes9x */
     if(ext_eq(ext, "md"))  return 11;  /* ota_11: gwenesis */
     if(ext_eq(ext, "gen")) return 11;  /* ota_11: gwenesis */
+    if(ext_eq(ext, "bin")) return 11;  /* Genesis dumps are often .bin */
     if(ext_eq(ext, "zip")) return 12;  /* ota_12: gngeo (neo geo) */
     return -1;
   }

@@ -2,6 +2,7 @@
 
 #ifndef USE_BLARGG_APU
 
+#include "esp_heap_caps.h"
 #include "snes9x.h"
 #include "spc700.h"
 #include "apu.h"
@@ -13,7 +14,10 @@ extern int32_t NoiseFreq[32];
 
 bool S9xInitAPU()
 {
-   IAPU.RAM = (uint8_t*) malloc(0x10000);
+   /* 64 KB contiguous: prefer internal RAM, but BT + hosted leave it fragmented — fall back to PSRAM */
+   IAPU.RAM = (uint8_t*) heap_caps_malloc(0x10000, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+   if (!IAPU.RAM)
+      IAPU.RAM = (uint8_t*) heap_caps_malloc(0x10000, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
    if (!IAPU.RAM)
    {
@@ -28,7 +32,7 @@ void S9xDeinitAPU()
 {
    if (IAPU.RAM)
    {
-      free(IAPU.RAM);
+      heap_caps_free(IAPU.RAM);
       IAPU.RAM = NULL;
    }
 }

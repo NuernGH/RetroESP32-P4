@@ -828,12 +828,15 @@ static void snes_init_core(void)
     Settings.DisableSoundEcho = false;  /* echo/reverb — many games need it (DKC, FF6, etc.) */
     Settings.InterpolatedSound = true;  /* linear interpolation — removes aliasing */
 
+    odroid_trail("free int %uK big %uK", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+                 (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024));
     if (!S9xInitMemory()) {
         ESP_LOGE(TAG, "S9xInitMemory failed");
         return;
     }
     if (!S9xInitAPU()) {
         ESP_LOGE(TAG, "S9xInitAPU failed");
+        odroid_trail("S9xInitAPU failed");
         return;
     }
     if (!S9xInitSound(0, 0)) {

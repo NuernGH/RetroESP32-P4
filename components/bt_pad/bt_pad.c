@@ -669,6 +669,14 @@ void bt_pad_scan(void)
         .limited = 0, .passive = 0, .filter_duplicates = 0,
     };
     int rc = ble_gap_disc(own_type, SCAN_MS, &p, gap_event, NULL);
+    for (int tries = 0; rc == BLE_HS_EBUSY && tries < 5; tries++) {
+        /* a connect attempt or terminate is still in flight: cancel it and give the controller time */
+        ble_gap_conn_cancel();
+        ble_gap_disc_cancel();
+        s_connecting = false;
+        vTaskDelay(pdMS_TO_TICKS(400));
+        rc = ble_gap_disc(own_type, SCAN_MS, &p, gap_event, NULL);
+    }
     if (rc != 0) {
         set_status("scan failed (%d)", rc);
         ESP_LOGE(TAG, "ble_gap_disc rc=%d", rc);

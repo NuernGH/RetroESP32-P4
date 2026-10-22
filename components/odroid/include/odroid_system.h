@@ -45,7 +45,8 @@ void odroid_system_led_set(int value);
 #define ODROID_RESTART_MAGIC 0x52535452u
 #define ODROID_TRAIL_LINES 10
 typedef struct { uint32_t magic; uint32_t intentional; char task[16]; uint32_t n; char line[ODROID_TRAIL_LINES][34]; } odroid_restart_info_t;
-extern odroid_restart_info_t odroid_restart_info;
+/* Fixed LP-RAM address (not a linker symbol) so the launcher and every app see the same struct. */
+#define odroid_restart_info (*(odroid_restart_info_t *)0x5010E000)
 void odroid_restart_mark_intentional(void);
 /* Breadcrumb trail kept in RTC RAM across the restart; the launcher shows it (no serial log on this board). */
 void odroid_trail(const char *fmt, ...) __attribute__((format(printf, 1, 2)));

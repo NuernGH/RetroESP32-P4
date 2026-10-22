@@ -34,7 +34,6 @@ static const char *TAG = "odroid_system";
 /* Who called esp_restart(): survives the reset so the launcher can show it (no serial log on this board). */
 #include "esp_attr.h"
 #include "esp_system.h"
-RTC_NOINIT_ATTR odroid_restart_info_t odroid_restart_info;
 static void restart_note(void)
 {
     odroid_restart_info.magic = ODROID_RESTART_MAGIC;
