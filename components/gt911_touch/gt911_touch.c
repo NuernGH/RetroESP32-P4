@@ -131,5 +131,42 @@ bool gt911_touch_get_xy(uint16_t *x, uint16_t *y)
     bool touched = esp_lcd_touch_get_coordinates(s_tp, x, y, touch_strength, &touch_cnt, 1);
     s_finger_down = touched;
 
+    /* Ghost-point filter: a finger cannot jump hundreds of pixels between two
+     * reads. A far-away point while a finger is already down is held back and
+     * only accepted if it shows up twice in a row (a real fast flick). */
+    static bool have_last = false, have_cand = false;
+    static uint16_t lx, ly, cx, cy;
+    if (!touched) {
+        have_last = false;
+        have_cand = false;
+        return false;
+    }
+    if (have_last) {
+        int dx = (int)*x - (int)lx, dy = (int)*y - (int)ly;
+        if (dx < 0) dx = -dx;
+        if (dy < 0) dy = -dy;
+        if (dx > 150 || dy > 150) {
+            int cdx = have_cand ? (int)*x - (int)cx : 999;
+            int cdy = have_cand ? (int)*y - (int)cy : 999;
+            if (cdx < 0) cdx = -cdx;
+            if (cdy < 0) cdy = -cdy;
+            if (have_cand && cdx <= 60 && cdy <= 60) {
+                have_cand = false;              /* confirmed: genuine jump */
+            } else {
+                cx = *x;
+                cy = *y;
+                have_cand = true;
+                *x = lx;                        /* hold last good point */
+                *y = ly;
+                return true;
+            }
+        } else {
+            have_cand = false;
+        }
+    }
+    lx = *x;
+    ly = *y;
+    have_last = true;
+
     return touched;
 }
