@@ -64,7 +64,7 @@
 
 //{#pragma region Emulator and Directories
   char EMULATORS[COUNT][30] = {
-    "SETTINGS (BT26)",
+    "SETTINGS (BT28)",
     "FAVORITES",
     "RECENTLY PLAYED",
     "NINTENDO ENTERTAINMENT SYSTEM",
@@ -1042,7 +1042,7 @@
         if (nowus - last_refresh > 500000) {
           last_refresh = nowus;
           count = bt_pad_get_devices(devs, 8);
-          if (count > 5) count = 5;
+          if (count > 3) count = 3;
           dirty = true;
         }
       }
@@ -1075,16 +1075,16 @@
         /* left column: paired pad + nearby devices */
         int lx = 30, lw = 480, y = 80;
         ui_text(lx, y, "PAIRED PAD", DIM, GUI_BT_BG); y += 38;
-        ui_card(lx, y, lw, 72, CARD, EDGE);
+        ui_card(lx, y, lw, 80, CARD, EDGE);
         if (saved) {
           char nm[26]; snprintf(nm, sizeof(nm), "%.24s", bt_pad_saved_name());
-          ui_fill(lx + 18, y + 30, 14, 14, conn ? GRN : DIM);
+          ui_fill(lx + 18, y + 33, 14, 14, conn ? GRN : DIM);
           ui_text(lx + 46, y + 8, nm, TXT, CARD);
-          ui_text(lx + 46, y + 38, conn ? "connected" : "saved - waiting for pad", conn ? GRN : DIM, CARD);
+          ui_text(lx + 46, y + 42, conn ? "connected" : "saved - waiting for pad", conn ? GRN : DIM, CARD);
         } else {
           ui_text(lx + 18, y + 20, "no pad paired yet", DIM, CARD);
         }
-        y += 72 + 22;
+        y += 80 + 14;
         ui_text(lx, y, scanning ? "NEARBY (SCANNING...)" : "NEARBY", DIM, GUI_BT_BG); y += 38;
         if (!ready) {
           ui_text(lx, y, bt_pad_status_text(), DIM, GUI_BT_BG);
@@ -1101,7 +1101,7 @@
         struct { const char *label; int kind; bool en; uint16_t col; } btn[] = {
           { scanning ? "SCANNING..." : "PAIR NEW PAD", BTH_PAIR, ready && !scanning, ACC },
           { "RECONNECT", BTH_RECONNECT, ready && saved && !conn, ACC },
-          { confirm_forget ? "TAP AGAIN: FORGET" : "FORGET PAD", BTH_FORGET, ready && saved, RED },
+          { confirm_forget ? "SURE? TAP" : "FORGET PAD", BTH_FORGET, ready && saved, RED },
           { "BACK", BTH_BACK, true, DIM },
         };
         for (int i = 0; i < 4; i++) {
