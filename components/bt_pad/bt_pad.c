@@ -643,6 +643,11 @@ static void gatt_next(void)
         s_connecting = false;
         set_status("connected: %s", s_pad_name);
         ESP_LOGI(TAG, "pad ready: %s", s_pad_name);
+        {   /* mark the pad present now: some pads only send a report when a button changes */
+            gamepad_state_t idle;
+            memset(&idle, 0, sizeof(idle));
+            gamepad_bt_set(&idle, GAMEPAD_BT_VID, s_pad_pid);
+        }
         return;
     }
     if (rc != 0) set_status("gatt step %d failed (%d)", s_step, rc);
