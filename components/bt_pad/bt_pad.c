@@ -379,6 +379,14 @@ static void parse_report_map(const uint8_t *d, int len)
         }
     }
     ESP_LOGI(TAG, "report map: %d bytes, %d input fields", len, s_nfields);
+    for (int o = 0; o < len; o += 24) {
+        char hx[24 * 3 + 1]; int hp = 0;
+        for (int k = o; k < len && k < o + 24; k++) hp += snprintf(hx + hp, sizeof(hx) - hp, "%02X ", d[k]);
+        ESP_LOGI(TAG, "map[%3d] %s", o, hx);
+    }
+    for (int k = 0; k < s_nfields; k++)
+        ESP_LOGI(TAG, "field %d: rid %u bit %u size %u page %02X usage %02X", k, (unsigned)s_fields[k].rid,
+                 (unsigned)s_fields[k].bitoff, (unsigned)s_fields[k].size, s_fields[k].page, s_fields[k].usage);
 }
 
 static uint32_t get_bits(const uint8_t *d, int len, uint16_t off, uint8_t size, bool sign)
@@ -591,6 +599,7 @@ static int on_rref(uint16_t ch, const struct ble_gatt_error *e, struct ble_gatt_
         os_mbuf_copydata(at->om, 0, 2, v);
         s_rch[idx].rid = v[0];
         s_rch[idx].notify = (v[1] == 1);      /* 1 = input report */
+        ESP_LOGI(TAG, "report char %d: handle %u id %u type %u", idx, s_rch[idx].val_handle, v[0], v[1]);
     }
     s_step++; gatt_next();
     return 0;
@@ -695,6 +704,15 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
         if (n > (int)sizeof(buf)) n = sizeof(buf);
         os_mbuf_copydata(ev->notify_rx.om, 0, n, buf);
         s_nnotify++;
+        {   /* log reports that differ from the previous one (capped) */
+            static uint8_t last[40]; static int last_n = -1, logged = 0;
+            if (logged < 150 && (n != last_n || memcmp(last, buf, n))) {
+                char hx[40 * 3 + 1]; int hp = 0;
+                for (int k = 0; k < n; k++) hp += snprintf(hx + hp, sizeof(hx) - hp, "%02X ", buf[k]);
+                ESP_LOGI(TAG, "rx h%u l%d: %s", ev->notify_rx.attr_handle, n, hx);
+                memcpy(last, buf, n); last_n = n; logged++;
+            }
+        }
         snprintf(s_dbg, sizeof(s_dbg), "l%d f%d x%d tail %02X%02X%02X%02X",
                  n, s_nfields, s_xbox_names,
                  n>12?buf[12]:0, n>13?buf[13]:0, n>14?buf[14]:0, n>15?buf[15]:0);
