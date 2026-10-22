@@ -552,6 +552,7 @@ static int on_chr(uint16_t ch, const struct ble_gatt_error *e, const struct ble_
 {
     if (e->status == 0 && c) {
         uint16_t u = ble_uuid_u16(&c->uuid.u);
+        ESP_LOGI(TAG, "chr uuid %04X handle %u props %02X", u, c->val_handle, c->properties);
         if (u == 0x2A4B) s_map_handle = c->val_handle;
         else if (u == 0x2A4D && s_nrch < MAX_RCHARS && (c->properties & BLE_GATT_CHR_PROP_NOTIFY)) {
             memset(&s_rch[s_nrch], 0, sizeof(rchar_t));
@@ -568,6 +569,7 @@ static int on_dsc(uint16_t ch, const struct ble_gatt_error *e, uint16_t chr_val,
 {
     if (e->status == 0 && d) {
         uint16_t u = ble_uuid_u16(&d->uuid.u);
+        ESP_LOGI(TAG, "dsc %04X handle %u (chr %u)", u, d->handle, chr_val);
         for (int i = 0; i < s_nrch; i++) {
             if (s_rch[i].val_handle != chr_val) continue;
             if (u == 0x2902) s_rch[i].cccd_handle = d->handle;
@@ -607,6 +609,7 @@ static int on_rref(uint16_t ch, const struct ble_gatt_error *e, struct ble_gatt_
 
 static int on_cccd(uint16_t ch, const struct ble_gatt_error *e, struct ble_gatt_attr *at, void *a)
 {
+    ESP_LOGI(TAG, "cccd write status %d (step %d)", e->status, s_step);
     s_step++; gatt_next();
     return 0;
 }
