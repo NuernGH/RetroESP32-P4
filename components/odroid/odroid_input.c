@@ -103,6 +103,7 @@ static adc_oneshot_unit_handle_t s_gpio_pad_adc = NULL;
 volatile int odroid_paddle_adc_raw = -1;
 bool odroid_input_xy_menu_disable = false;
 bool odroid_input_touch_buttons_disable = false;
+bool odroid_input_touch_nav = false;
 #ifndef CONFIG_HDMI_OUTPUT
 static adc_oneshot_unit_handle_t s_paddle_adc_handle = NULL;
 static adc_oneshot_unit_handle_t s_battery_adc_handle = NULL;
@@ -266,6 +267,101 @@ void odroid_input_gamepad_init(void)
 #endif
 }
 
+#ifndef CONFIG_HDMI_OUTPUT
+/* ─── Touch navigation (launcher) ────────────────────────────────────
+ * Landscape UI coords: ui_x = raw y (0..799), ui_y = 479 - raw x.
+ * Swipe left/right/up/down = D-pad, short tap = A, long press = B.
+ * Each recognised gesture holds its virtual button for NAV_PULSE_US. */
+#define NAV_SWIPE_X_PX    60
+#define NAV_SWIPE_Y_PX    45
+#define NAV_LONG_PRESS_US 600000LL
+#define NAV_PULSE_US      100000LL
+
+static bool    s_nav_down = false, s_nav_moved = false;
+static int     s_nav_sx, s_nav_sy;
+static int64_t s_nav_t0 = 0, s_nav_pulse_until = 0, s_nav_last_seen = 0;
+static int     s_nav_pulse_btn = -1;
+static volatile int      s_tap_x = -1, s_tap_y = -1;
+static volatile uint32_t s_tap_seq = 0;
+
+/* Touch navigation for in-game menus: wait for the finger that opened the menu to lift,
+ * then switch swipe/tap navigation on; leave() restores the in-game edge zones. */
+void odroid_input_touch_nav_enter(void)
+{
+    uint16_t x, y;
+    int64_t quiet_since = esp_timer_get_time();
+    for (int i = 0; i < 150; i++) {            /* up to ~3 s */
+        if (gt911_touch_get_xy(&x, &y)) quiet_since = esp_timer_get_time();
+        else if (esp_timer_get_time() - quiet_since > 200000) break;
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    s_nav_down = false; s_nav_moved = false; s_nav_pulse_btn = -1;
+    odroid_input_touch_nav = true;
+}
+
+void odroid_input_touch_nav_leave(void)
+{
+    odroid_input_touch_nav = false;
+}
+
+/* Position (UI coords) of the most recent short tap; seq increments per tap. */
+uint32_t odroid_input_touch_last_tap(int *x, int *y)
+{
+    if (x) *x = s_tap_x;
+    if (y) *y = s_tap_y;
+    return s_tap_seq;
+}
+
+#define NAV_RELEASE_DEBOUNCE_US 150000LL  /* GT911 can drop reads while a finger is held */
+
+static void touch_nav_pulse(int btn)
+{
+    s_nav_pulse_btn = btn;
+    s_nav_pulse_until = esp_timer_get_time() + NAV_PULSE_US;
+}
+
+static void touch_nav_apply(odroid_gamepad_state *state)
+{
+    uint16_t tx = 0, ty = 0;
+    bool touched = gt911_touch_get_xy(&tx, &ty);
+    int64_t now = esp_timer_get_time();
+    int ux = (int)ty, uy = 479 - (int)tx;
+
+    if (touched) {
+        s_nav_last_seen = now;
+        if (!s_nav_down) {
+            s_nav_down = true; s_nav_moved = false;
+            s_nav_sx = ux; s_nav_sy = uy; s_nav_t0 = now;
+        } else {
+            int dx = ux - s_nav_sx, dy = uy - s_nav_sy;
+            int adx = dx < 0 ? -dx : dx, ady = dy < 0 ? -dy : dy;
+            if (adx >= NAV_SWIPE_X_PX && adx > ady) {
+                touch_nav_pulse(dx < 0 ? ODROID_INPUT_LEFT : ODROID_INPUT_RIGHT);
+                s_nav_moved = true; s_nav_sx = ux; s_nav_sy = uy;
+            } else if (ady >= NAV_SWIPE_Y_PX && ady > adx) {
+                touch_nav_pulse(dy < 0 ? ODROID_INPUT_UP : ODROID_INPUT_DOWN);
+                s_nav_moved = true; s_nav_sx = ux; s_nav_sy = uy;
+            } else if (!s_nav_moved && (now - s_nav_t0) >= NAV_LONG_PRESS_US) {
+                /* Long press fires while still held, then the release is ignored */
+                touch_nav_pulse(ODROID_INPUT_B);
+                s_nav_moved = true;
+            }
+        }
+    } else if (s_nav_down && (now - s_nav_last_seen) >= NAV_RELEASE_DEBOUNCE_US) {
+        s_nav_down = false;
+        if (!s_nav_moved) {
+            s_tap_x = s_nav_sx; s_tap_y = s_nav_sy; s_tap_seq++;
+            touch_nav_pulse(ODROID_INPUT_A);
+        }
+    }
+
+    if (s_nav_pulse_btn >= 0) {
+        if (now < s_nav_pulse_until) state->values[s_nav_pulse_btn] = 1;
+        else s_nav_pulse_btn = -1;
+    }
+}
+#endif /* !CONFIG_HDMI_OUTPUT */
+
 void odroid_input_gamepad_read(odroid_gamepad_state *state)
 {
     memset(state, 0, sizeof(odroid_gamepad_state));
@@ -327,7 +423,9 @@ void odroid_input_gamepad_read(odroid_gamepad_state *state)
 
     /* Touch-panel virtual shoulder buttons — sampled at 2 Hz to avoid CPU overhead.
      * Disabled when touch keyboard is active (odroid_input_touch_buttons_disable). */
-    if (!odroid_input_touch_buttons_disable) {
+    if (odroid_input_touch_nav) {
+        if (!odroid_input_touch_buttons_disable) touch_nav_apply(state);
+    } else if (!odroid_input_touch_buttons_disable) {
         int64_t now = esp_timer_get_time();
         if (now - s_touch_last_us >= TOUCH_POLL_INTERVAL_US) {
             s_touch_last_us = now;

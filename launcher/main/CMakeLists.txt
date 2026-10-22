@@ -8,7 +8,7 @@ idf_component_register(
              ppa_engine gamepad audio pngaux
              driver esp_lcd esp_psram fatfs vfs sdmmc nvs_flash
              esp_partition esp_app_format esp_event app_update
-             psram_app_loader serial_upload
+             psram_app_loader serial_upload bt_pad
 )
 
 # The original RetroESP32 code uses unsafe sprintf patterns.

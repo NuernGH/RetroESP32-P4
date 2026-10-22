@@ -588,7 +588,15 @@ static void genesis_show_volume(void)
 }
 
 /* ─── In-game menu (same pattern as SNES) ──────────────────────── */
+static bool genesis_show_menu_inner(void);
 static bool genesis_show_menu(void)
+{
+    odroid_input_touch_nav_enter();
+    bool r = genesis_show_menu_inner();
+    odroid_input_touch_nav_leave();
+    return r;
+}
+static bool genesis_show_menu_inner(void)
 {
     uint16_t *fb = gen_rgb565;
     if (!fb) return false;

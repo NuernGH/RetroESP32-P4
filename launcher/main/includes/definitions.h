@@ -32,7 +32,7 @@
 /*
   Emulator Count + 3 for Settings, Favorites, and Recently Played
 */
-#define COUNT 19
+#define COUNT 10
 
 /*
 

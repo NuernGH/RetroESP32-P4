@@ -687,6 +687,11 @@ esp_err_t gamepad_init(const gamepad_config_t *config)
 
     s_running = true;
 
+#ifdef GAMEPAD_NO_USB_HOST
+    ESP_LOGW(TAG, "USB host disabled (debug build): native USB stays a serial log port");
+    return ESP_OK;
+#endif
+
     /* Start USB host library task */
     BaseType_t ret = xTaskCreatePinnedToCore(usb_lib_task, "usb_host",
                                               config->usb_task_stack,
@@ -765,24 +770,58 @@ void gamepad_deinit(void)
     memset(&s_state, 0, sizeof(s_state));
 }
 
-void gamepad_get_state(gamepad_state_t *state)
+/* ---- Bluetooth pad source: used only while no USB pad is connected ---- */
+static portMUX_TYPE s_bt_mux = portMUX_INITIALIZER_UNLOCKED;
+static gamepad_state_t s_bt_state;
+static uint16_t s_bt_vid, s_bt_pid;
+
+void gamepad_bt_set(const gamepad_state_t *st, uint16_t vid, uint16_t pid)
 {
-    if (!state || !s_mutex) {
-        if (state) memset(state, 0, sizeof(*state));
-        return;
+    portENTER_CRITICAL(&s_bt_mux);
+    if (st) {
+        s_bt_state = *st;
+        s_bt_state.connected = 1;
+        s_bt_vid = vid;
+        s_bt_pid = pid;
+    } else {
+        memset(&s_bt_state, 0, sizeof(s_bt_state));
+        s_bt_vid = s_bt_pid = 0;
     }
-    xSemaphoreTake(s_mutex, portMAX_DELAY);
-    memcpy(state, &s_state, sizeof(gamepad_state_t));
-    xSemaphoreGive(s_mutex);
+    portEXIT_CRITICAL(&s_bt_mux);
 }
 
-bool gamepad_is_connected(void)
+static bool usb_connected(void)
 {
     if (!s_mutex) return false;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     bool conn = (s_state.connected != 0);
     xSemaphoreGive(s_mutex);
     return conn;
+}
+
+void gamepad_get_state(gamepad_state_t *state)
+{
+    if (!state) return;
+    if (s_mutex) {
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        memcpy(state, &s_state, sizeof(gamepad_state_t));
+        xSemaphoreGive(s_mutex);
+        if (state->connected) return;
+    } else {
+        memset(state, 0, sizeof(*state));
+    }
+    portENTER_CRITICAL(&s_bt_mux);
+    *state = s_bt_state;
+    portEXIT_CRITICAL(&s_bt_mux);
+}
+
+bool gamepad_is_connected(void)
+{
+    if (usb_connected()) return true;
+    portENTER_CRITICAL(&s_bt_mux);
+    bool c = s_bt_state.connected != 0;
+    portEXIT_CRITICAL(&s_bt_mux);
+    return c;
 }
 
 void gamepad_buttons_to_str(uint32_t buttons, char *buf, size_t buf_size)
@@ -832,6 +871,12 @@ int gamepad_get_raw_report(uint8_t *buf, size_t buf_size)
 
 void gamepad_get_vid_pid(uint16_t *vid, uint16_t *pid)
 {
-    if (vid) *vid = s_vid;
-    if (pid) *pid = s_pid;
+    uint16_t v = s_vid, p = s_pid;
+    if (v == 0 && p == 0) {
+        portENTER_CRITICAL(&s_bt_mux);
+        v = s_bt_vid; p = s_bt_pid;
+        portEXIT_CRITICAL(&s_bt_mux);
+    }
+    if (vid) *vid = v;
+    if (pid) *pid = p;
 }

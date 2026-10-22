@@ -15,9 +15,13 @@
 #endif
 #include "ppa_engine.h"
 #include "gamepad.h"
+#include "bt_pad.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
 #include "audio.h"
 
 #include <string.h>
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_err.h"
 #include "driver/i2c_master.h"
@@ -26,6 +30,35 @@
 #include "freertos/task.h"
 
 static const char *TAG = "odroid_system";
+
+/* Who called esp_restart(): survives the reset so the launcher can show it (no serial log on this board). */
+#include "esp_attr.h"
+#include "esp_system.h"
+RTC_NOINIT_ATTR odroid_restart_info_t odroid_restart_info;
+static void restart_note(void)
+{
+    odroid_restart_info.magic = ODROID_RESTART_MAGIC;
+    strncpy(odroid_restart_info.task, pcTaskGetName(NULL), sizeof(odroid_restart_info.task) - 1);
+    odroid_restart_info.task[sizeof(odroid_restart_info.task) - 1] = 0;
+    odroid_trail("RESTART in %.14s", odroid_restart_info.task);
+}
+#include <stdarg.h>
+#include <stdio.h>
+void odroid_trail(const char *fmt, ...)
+{
+    va_list ap; va_start(ap, fmt);
+    char tmp[34];
+    vsnprintf(tmp, sizeof(tmp), fmt, ap);
+    va_end(ap);
+    ESP_LOGW("trail", "%s", tmp);
+    uint32_t i = odroid_restart_info.n;
+    if (i >= ODROID_TRAIL_LINES) { /* keep the newest: drop the oldest */
+        memmove(odroid_restart_info.line[0], odroid_restart_info.line[1], sizeof(odroid_restart_info.line) - sizeof(odroid_restart_info.line[0]));
+        i = ODROID_TRAIL_LINES - 1;
+    } else odroid_restart_info.n = i + 1;
+    memcpy(odroid_restart_info.line[i], tmp, sizeof(tmp));
+}
+void odroid_restart_mark_intentional(void) { odroid_restart_info.intentional = 1; }
 static bool s_initialized = false;
 static i2c_master_bus_handle_t s_i2c_handle = NULL;
 
@@ -53,6 +86,28 @@ void odroid_system_init(void)
 
     ESP_LOGI(TAG, "=== RetroESP32-P4 System Init ===");
 
+    /* 0. Any later reset or power cycle returns to the launcher, not to this emulator.
+     * (The launcher sets the boot partition to the emulator just before the restart that got us here.) */
+    {
+        const esp_partition_t *run = esp_ota_get_running_partition();
+        if (run && run->subtype != ESP_PARTITION_SUBTYPE_APP_FACTORY) {
+            const esp_partition_t *factory = esp_partition_find_first(
+                ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+            if (factory) esp_ota_set_boot_partition(factory);
+        }
+    }
+
+    {   /* a restart record from the previous run is only read by the launcher; apps start clean */
+        const esp_partition_t *run = esp_ota_get_running_partition();
+        if (odroid_restart_info.magic != ODROID_RESTART_MAGIC) odroid_restart_info.n = 0;
+        if (run && run->subtype != ESP_PARTITION_SUBTYPE_APP_FACTORY)
+            odroid_restart_info.n = 0;   /* each app run starts a fresh trail */
+        odroid_restart_info.magic = ODROID_RESTART_MAGIC;
+        odroid_restart_info.intentional = 0;
+        odroid_trail("%s init", (run && run->subtype != ESP_PARTITION_SUBTYPE_APP_FACTORY) ? "APP" : "LAUNCHER");
+        esp_register_shutdown_handler(restart_note);
+    }
+
     /* 1. I2C bus */
     init_i2c();
 
@@ -64,6 +119,17 @@ void odroid_system_init(void)
     ESP_LOGI(TAG, "Initializing USB HID gamepad host...");
     gamepad_config_t gp_cfg = GAMEPAD_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(gamepad_init(&gp_cfg));
+
+    /* 3b. Bluetooth LE pad (C6 radio); reconnects the saved pad in the background */
+    {
+        const esp_partition_t *run = esp_ota_get_running_partition();
+        if (run && run->subtype != ESP_PARTITION_SUBTYPE_APP_FACTORY)
+            bt_pad_start_after(8000);   /* games: let the emulator allocate its memory first */
+        else
+            bt_pad_start();
+    }
+
+    odroid_trail("pads ok free=%uK", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
 
     /* 4. Audio (ES8311 codec) */
     ESP_LOGI(TAG, "Initializing audio (ES8311 codec)...");

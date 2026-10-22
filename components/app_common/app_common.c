@@ -13,6 +13,7 @@
 #include "freertos/timers.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include <string.h>
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_ota_ops.h"
@@ -135,6 +136,7 @@ void app_init(void)
     if (guard_tmr) xTimerStart(guard_tmr, 0);
 
     ESP_LOGI(TAG, "=== Emulator App Init Complete ===");
+    odroid_trail("app_init done");
 
     /* 8. Safe-boot check: hold A during boot → return to launcher */
     app_check_safe_boot();
@@ -157,22 +159,11 @@ void app_check_safe_boot(void)
     }
     ESP_LOGI(TAG, "Safe-boot check passed (button A not held).");
 #else
-    /* LCD: use touch screen */
-    ESP_LOGI(TAG, "Safe-boot check: touch screen to return to launcher...");
-
-    /* Poll touch screen a few times over ~500ms.
-     * USB gamepad isn't ready this early, but the GT911 touch controller
-     * is already initialized by odroid_system_init(). */
-    for (int i = 0; i < 10; i++) {
-        uint16_t x, y;
-        if (gt911_touch_get_xy(&x, &y)) {
-            ESP_LOGW(TAG, "Touch detected at (%u, %u) — safe-boot: returning to launcher!", x, y);
-            app_return_to_launcher();
-            /* Does not return */
-        }
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-    ESP_LOGI(TAG, "Safe-boot check passed (no touch detected).");
+    /* LCD: the old touch-to-abort check fired whenever the finger that picked the game was
+     * still near the screen, so touch-launched games bounced straight back to the launcher.
+     * Any reset or crash now returns to the launcher anyway (see odroid_system_init), so the
+     * check is no longer needed. */
+    ESP_LOGI(TAG, "Safe-boot check skipped (reset always returns to the launcher).");
 #endif
 }
 
@@ -189,12 +180,14 @@ int app_get_rom_path(char *buf, int buflen)
     snprintf(buf, buflen, "%s", path);
     free(path);
     ESP_LOGI(TAG, "ROM path: %s", buf);
+    { const char *b = strrchr(buf, '/'); odroid_trail("ROM %.28s", b ? b + 1 : buf); }
     return 0;
 }
 
 /* ─── Return to launcher ──────────────────────────────────────── */
 void app_return_to_launcher(void)
 {
+    odroid_trail("RTL ra=%08x", (unsigned)(uintptr_t)__builtin_return_address(0));
     ESP_LOGI(TAG, "Returning to launcher (factory partition)...");
 
     /* Black screen + backlight off to avoid white flash during reboot */
@@ -213,6 +206,7 @@ void app_return_to_launcher(void)
         ESP_LOGE(TAG, "Factory partition not found!");
     }
 
+    odroid_restart_mark_intentional();
     esp_restart();
     /* Does not return */
     while (1) {}

@@ -335,7 +335,15 @@ static bool gb_delete_save(void)
 #define GB_MENU_EXIT       6
 
 /* Returns: true = keep running, false = exit game */
+static bool gb_show_ingame_menu_inner(void);
 static bool gb_show_ingame_menu(void)
+{
+    odroid_input_touch_nav_enter();
+    bool r = gb_show_ingame_menu_inner();
+    odroid_input_touch_nav_leave();
+    return r;
+}
+static bool gb_show_ingame_menu_inner(void)
 {
     uint16_t *fb = display_get_emu_buffer();
     if (!fb) return true;

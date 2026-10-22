@@ -577,7 +577,15 @@ static void snes_show_volume(void)
     }
 }
 
+static bool snes_show_menu_inner(void);
 static bool snes_show_menu(void)
+{
+    odroid_input_touch_nav_enter();
+    bool r = snes_show_menu_inner();
+    odroid_input_touch_nav_leave();
+    return r;
+}
+static bool snes_show_menu_inner(void)
 {
     /* Use the inactive framebuffer as scratch for menu drawing */
     uint16_t *fb = snes_fb[snes_fb_write];

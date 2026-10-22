@@ -1,4 +1,7 @@
-  #include "includes/core.h"
+  #include "gamepad.h"
+  #include "esp_system.h"
+  #include "bt_pad.h"
+#include "includes/core.h"
   #include "includes/definitions.h"
   #include "includes/structures.h"
   #include "includes/declarations.h"
@@ -61,21 +64,12 @@
 
 //{#pragma region Emulator and Directories
   char EMULATORS[COUNT][30] = {
-    "SETTINGS (v3.1)",
+    "SETTINGS (BT18)",
     "FAVORITES",
     "RECENTLY PLAYED",
     "NINTENDO ENTERTAINMENT SYSTEM",
     "NINTENDO GAME BOY",
     "NINTENDO GAME BOY COLOR",
-    "SEGA MASTER SYSTEM",
-    "SEGA GAME GEAR",
-    "COLECOVISION",
-    "ATARI 7800",
-    "ZX SPECTRUM",
-    "ATARI 2600",
-    "ATARI LYNX",
-    "PC ENGINE",
-    "ATARI 800",
     "SUPER NINTENDO",
     "SEGA GENESIS",
     "NEO GEO",
@@ -89,15 +83,6 @@
     "nes",      // nofrendo
     "gb",       // gnuboy
     "gbc",      // gnuboy
-    "sms",      // smsplus
-    "gg",       // smsplus
-    "col",      // smsplus
-    "a78",      // prosystem
-    "spectrum", // spectrum
-    "a26",      // stella
-    "lynx",     // handy
-    "pce",      // huexpress
-    "a800",     // atari800
     "snes",     // snes9x
     "gen",      // gwenesis
     "neogeo",   // gngeo
@@ -106,9 +91,7 @@
 
   const char *SHORT_NAMES[COUNT] = {
     "", "", "",
-    "NES", "GB", "GBC", "SMS", "GG", "COL",
-    "A78", "ZX", "A26", "LYNX", "PCE",
-    "A800", "SNES", "GEN", "NEOGEO", "PAPP"
+    "NES", "GB", "GBC", "SNES", "GEN", "NEOGEO", "PAPP"
   };
 
   char EXTENSIONS[COUNT][10] = {
@@ -118,15 +101,6 @@
     "nes",      // nofrendo
     "gb",       // gnuboy
     "gbc",      // gnuboy
-    "sms",      // smsplus
-    "gg",       // smsplus
-    "col",      // smsplus
-    "a78",      // prosystem
-    "z80",      // spectrum
-    "a26",      // stella
-    "lnx",      // handy
-    "pce",      // huexpress
-    "xex",      // atari800
     "smc",      // snes9x
     "md",       // gwenesis
     "zip",      // gngeo (neo geo)
@@ -174,11 +148,48 @@
 
     // Joystick
     odroid_input_gamepad_init();
+    bt_pad_start();   /* C6 link + BLE host; reconnects the saved pad in the background */
+    odroid_input_touch_nav = true;   /* swipe/tap navigation in the launcher */
 
-#ifndef CONFIG_HDMI_OUTPUT
-    // Touch panel
-    gt911_touch_init(7, 8, -1, -1);
-#endif
+    {   /* no serial log on this board: show it when the last run ended in a crash */
+      esp_reset_reason_t rr = esp_reset_reason();
+      const char *why = NULL;
+      switch (rr) {
+        case ESP_RST_PANIC:     why = "PANIC (CRASH)"; break;
+        case ESP_RST_INT_WDT:   why = "INTERRUPT WATCHDOG"; break;
+        case ESP_RST_TASK_WDT:  why = "TASK WATCHDOG"; break;
+        case ESP_RST_WDT:       why = "WATCHDOG"; break;
+        case ESP_RST_BROWNOUT:  why = "BROWNOUT"; break;
+        default: break;
+      }
+      /* Breadcrumbs left by the app that just ran (cleared when an app starts or after showing). */
+      bool trail = odroid_restart_info.magic == ODROID_RESTART_MAGIC && odroid_restart_info.n > 1
+                   && odroid_restart_info.line[0][0] == 'A';   /* first line "APP init" = an app ran */
+      if (trail) {
+        clear_screen();
+        char hd[48];
+        snprintf(hd, sizeof(hd), "LAST RUN (%s)", why ? why : "RESET");
+        draw_text(20, 40, hd, false, true, false);
+        for (uint32_t i = 0; i < odroid_restart_info.n && i < ODROID_TRAIL_LINES; i++)
+          draw_text(20, 90 + 34 * i, odroid_restart_info.line[i], false, false, false);
+        display_flush();
+        vTaskDelay(pdMS_TO_TICKS(9000));
+        why = NULL;
+      }
+      odroid_restart_info.n = 0;
+      if (why) {
+        char m1[64], m2[64];
+        snprintf(m1, sizeof(m1), "LAST RESET: %s", why);
+        snprintf(m2, sizeof(m2), "MIN FREE INT %uK", (unsigned)(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024));
+        clear_screen();
+        draw_text(40, 180, m1, false, true, false);
+        draw_text(40, 230, m2, false, false, false);
+        display_flush();
+        vTaskDelay(pdMS_TO_TICKS(4000));
+      }
+    }
+
+    // Touch is initialised by odroid_system_init().
 
     // === SAFE MODE: Hold button A during boot ===
     // On ESP32-P4 there is no OTA partition table, so we just
@@ -448,20 +459,15 @@
     const char *dot = strrchr(name, '.');
     if (!dot) return false;
     const char *ext = dot + 1;
-    /* Neo Geo (step 17): hide neogeo.zip and gngeo_data.zip */
-    if (step == 17 && is_neogeo_system_file(name)) return false;
+    /* Neo Geo (step 8): hide neogeo.zip and gngeo_data.zip */
+    if (step == 8 && is_neogeo_system_file(name)) return false;
     if (strlen(EXTENSIONS[step]) > 0 && ext_eq(ext, EXTENSIONS[step])) return true;
-    // Atari 800 supports .xex, .atr, and .a52 (Atari 5200 cartridge)
-    if (step == 14 && ext_eq(ext, "atr")) return true;
-    if (step == 14 && ext_eq(ext, "a52")) return true;
-    // Spectrum supports both .z80 and .sna
-    if (step == 10 && ext_eq(ext, "sna")) return true;
-    // Atari 2600 supports both .a26 and .bin
-    if (step == 11 && ext_eq(ext, "bin")) return true;
+    // Genesis also accepts raw .bin dumps
+    if (step == 7 && ext_eq(ext, "bin")) return true;
     // SNES supports both .smc and .sfc
-    if (step == 15 && ext_eq(ext, "sfc")) return true;
+    if (step == 6 && ext_eq(ext, "sfc")) return true;
     // Genesis supports .md and .gen
-    if (step == 16 && ext_eq(ext, "gen")) return true;
+    if (step == 7 && ext_eq(ext, "gen")) return true;
     return false;
   }
 
@@ -472,13 +478,6 @@
    * Slot  Partition  Emulator        Extensions
    *  0    ota_0     nofrendo (NES)  .nes
    *  1    ota_1     gnuboy (GB/GBC) .gb .gbc
-   *  2    ota_2     smsplus (SMS)   .sms .gg .col
-   *  3    ota_3     spectrum (ZX)   .z80 .sna
-   *  4    ota_4     stella (A26)    .a26 .bin
-   *  5    ota_5     prosystem (A78) .a78
-   *  6    ota_6     handy (LNX)     .lnx
-   *  7    ota_7     huexpress (PCE) .pce
-   *  8    ota_8     atari800 (A800) .xex .atr .a52
    * 10    ota_10    snes9x (SNES)   .smc .sfc
    * 11    ota_11    gwenesis (GEN)  .md .gen
    * 12    ota_12    gngeo (NEOGEO)  .zip
@@ -487,19 +486,6 @@
     if(ext_eq(ext, "nes")) return 0;   /* ota_0: nofrendo */
     if(ext_eq(ext, "gb"))  return 1;   /* ota_1: gnuboy */
     if(ext_eq(ext, "gbc")) return 1;   /* ota_1: gnuboy */
-    if(ext_eq(ext, "sms")) return 2;   /* ota_2: smsplus */
-    if(ext_eq(ext, "gg"))  return 2;   /* ota_2: smsplus */
-    if(ext_eq(ext, "col")) return 2;   /* ota_2: smsplus */
-    if(ext_eq(ext, "z80")) return 3;   /* ota_3: spectrum */
-    if(ext_eq(ext, "sna")) return 3;   /* ota_3: spectrum */
-    if(ext_eq(ext, "a26")) return 4;   /* ota_4: stella */
-    if(ext_eq(ext, "bin")) return 4;   /* ota_4: stella */
-    if(ext_eq(ext, "a78")) return 5;   /* ota_5: prosystem */
-    if(ext_eq(ext, "lnx")) return 6;   /* ota_6: handy */
-    if(ext_eq(ext, "pce")) return 7;   /* ota_7: huexpress */
-    if(ext_eq(ext, "xex")) return 8;   /* ota_8: atari800 */
-    if(ext_eq(ext, "atr")) return 8;   /* ota_8: atari800 */
-    if(ext_eq(ext, "a52")) return 8;   /* ota_8: atari800 (5200 cart) */
     if(ext_eq(ext, "smc")) return 10;  /* ota_10: snes9x */
     if(ext_eq(ext, "sfc")) return 10;  /* ota_10: snes9x */
     if(ext_eq(ext, "md"))  return 11;  /* ota_11: gwenesis */
@@ -792,7 +778,7 @@
         continue;
       }
 
-      /* Emulator systems (3..13): count files in /sd/roms/{dir}/ */
+      /* Emulator systems (3..8): count files in /sd/roms/{dir}/ */
       char path[256];
       sprintf(path, "/sd/roms/%s", DIRECTORIES[e]);
       DIR *dir = opendir(path);
@@ -865,6 +851,10 @@
     draw_mask(x,y-1,400,38);
     draw_text(x,y,(char *)"MAP CONTROLLER",false, SETTING == 3 ? true : false, false);
 
+    y+=42;
+    draw_mask(x,y-1,400,38);
+    draw_text(x,y,(char *)"BLUETOOTH PADS",false, SETTING == 4 ? true : false, false);
+
     display_flush();
   }
 
@@ -907,12 +897,13 @@
 
       /* Wait for all inputs released first */
       gamepad_state_t gp;
+      int rel_wait = 0;   /* give up after ~4 s so a stuck input cannot hang the wizard */
       do {
         vTaskDelay(pdMS_TO_TICKS(50));
         gamepad_get_state(&gp);
-      } while (gp.buttons != 0 || gp.dpad != 0 ||
+      } while ((gp.buttons != 0 || gp.dpad != 0 ||
                gp.axis_lx < -96 || gp.axis_lx > 96 ||
-               gp.axis_ly < -96 || gp.axis_ly > 96);
+               gp.axis_ly < -96 || gp.axis_ly > 96) && ++rel_wait < 80);
 
       /* Wait for an input */
       uint32_t pressed = 0;
@@ -920,6 +911,17 @@
       while (!detected) {
         vTaskDelay(pdMS_TO_TICKS(30));
         gamepad_get_state(&gp);
+        {   /* escape hatch: touch long press with no pad button held cancels the wizard */
+          odroid_gamepad_state tg;
+          odroid_input_gamepad_read(&tg);
+          if (tg.values[ODROID_INPUT_B] && gp.buttons == 0 && gp.dpad == 0) {
+            clear_screen();
+            draw_text(40, 200, (char *)"MAPPING CANCELLED", false, true, false);
+            display_flush();
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            return;
+          }
+        }
         if (!gp.connected) {
           /* Controller disconnected mid-wizard */
           clear_screen();
@@ -967,6 +969,105 @@
     }
     display_flush();
     vTaskDelay(pdMS_TO_TICKS(1500));
+  }
+
+  /* ─── BLUETOOTH PADS screen ─────────────────────────────────────── */
+  void run_bt_pads_screen(void)
+  {
+    bt_pad_start();   /* no-op when already running */
+
+    bt_pad_dev_t devs[8];
+    int count = 0, sel = 0;       /* sel 0 = SCAN row, 1..count = devices */
+    bool dirty = true;
+    char last_status[64] = "";
+    bool last_scanning = false;
+    int tx0, ty0;
+    uint32_t last_tap_seq = odroid_input_touch_last_tap(&tx0, &ty0);
+
+    while (true) {
+      bt_pad_state_t st = bt_pad_state();
+      bool scanning = bt_pad_scanning();
+      if (strcmp(last_status, bt_pad_status_text()) != 0 || scanning != last_scanning) {
+        strlcpy(last_status, bt_pad_status_text(), sizeof(last_status));
+        last_scanning = scanning; dirty = true;
+      }
+      if (scanning) {
+        static int64_t last_refresh = 0;
+        int64_t nowus = esp_timer_get_time();
+        if (nowus - last_refresh > 500000) {
+          last_refresh = nowus;
+          count = bt_pad_get_devices(devs, 8);
+          dirty = true;
+        }
+      }
+      if (bt_pad_connected()) {   /* live view of what the pad sends */
+        static int64_t last_dbg = 0;
+        int64_t nowus = esp_timer_get_time();
+        if (nowus - last_dbg > 200000) { last_dbg = nowus; dirty = true; }
+      }
+      if (sel > count) sel = count;
+      if (dirty) {
+        clear_screen();
+        draw_text(40, 20, (char *)"BLUETOOTH PADS", false, true, false);
+        draw_text(40, 70, (char *)bt_pad_status_text(), false, false, false);
+        if (bt_pad_connected()) {
+          draw_text(40, 395, (char *)bt_pad_debug_text(), false, false, false);
+          gamepad_state_t g; gamepad_get_state(&g);
+          char gl[48];
+          snprintf(gl, sizeof(gl), "btn %04X dpad %X lx %d ly %d", (unsigned)g.buttons, g.dpad, g.axis_lx, g.axis_ly);
+          draw_text(40, 418, gl, false, false, false);
+        }
+        if (st == BT_PAD_READY) {
+          draw_text(40, 120, scanning ? (char *)"SCANNING..." : (char *)"SCAN", false, sel == 0, false);
+          for (int i = 0; i < count; i++) {
+            char line[40];
+            snprintf(line, sizeof(line), "%s%s", devs[i].hid ? "* " : "  ", devs[i].name[0] ? devs[i].name : "(no name)");
+            draw_text(40, 170 + i * 40, line, false, sel == i + 1, false);
+          }
+        }
+        draw_text(40, 440, (char *)"TAP: SELECT  HOLD: BACK  * = PAD", false, false, false);
+        display_flush();
+        dirty = false;
+      }
+
+      odroid_gamepad_state gp;
+      odroid_input_gamepad_read(&gp);
+      if (gp.values[ODROID_INPUT_B]) {
+        do {
+          vTaskDelay(pdMS_TO_TICKS(10));
+          odroid_input_gamepad_read(&gp);
+        } while (gp.values[ODROID_INPUT_B]);
+        break;
+      }
+
+      /* A tap on a row selects and activates it directly */
+      int tx, ty;
+      uint32_t tseq = odroid_input_touch_last_tap(&tx, &ty);
+      bool activate = false;
+      if (tseq != last_tap_seq) {
+        last_tap_seq = tseq;
+        if (ty >= 105 && ty < 165) { sel = 0; activate = true; }
+        else if (ty >= 165) {
+          int row = (ty - 165) / 40;
+          if (row < count) { sel = row + 1; activate = true; }
+        }
+        dirty = true;
+      }
+      if (gp.values[ODROID_INPUT_A]) activate = true;
+      if (activate && st == BT_PAD_READY && !scanning) {
+        if (sel == 0) bt_pad_scan();
+        else if (sel <= count) bt_pad_connect(&devs[sel - 1]);
+        /* let the touch pulse for A finish so it does not fire twice */
+        do {
+          vTaskDelay(pdMS_TO_TICKS(10));
+          odroid_input_gamepad_read(&gp);
+        } while (gp.values[ODROID_INPUT_A]);
+        dirty = true;
+      }
+      if (gp.values[ODROID_INPUT_DOWN]) { sel = sel < count ? sel + 1 : 0; dirty = true; usleep(200000); }
+      if (gp.values[ODROID_INPUT_UP])   { sel = sel > 0 ? sel - 1 : count; dirty = true; usleep(200000); }
+      vTaskDelay(pdMS_TO_TICKS(30));
+    }
   }
 
 //}#pragma endregion Settings
@@ -2039,9 +2140,9 @@
         struct dirent *file;
         while ((file = readdir(directory)) != NULL) {
           bool extenstion = matches_rom_extension(file->d_name, STEP);
-          /* Neo Geo (STEP 17): skip directories and system files */
+          /* Neo Geo (STEP 8): skip directories and system files */
           bool is_dir = (file->d_type == 2);
-          if (is_dir && STEP == 17) continue;
+          if (is_dir && STEP == 8) continue;
           if(extenstion || is_dir) {
             SEEK[ROMS.total+1] = telldir(directory);
             ROMS.total++;
@@ -2058,7 +2159,7 @@
           while ((file = readdir(directory)) != NULL && SORTED_COUNT < ROMS.total) {
             bool extenstion = matches_rom_extension(file->d_name, STEP);
             bool is_dir2 = (file->d_type == 2);
-            if (is_dir2 && STEP == 17) continue;
+            if (is_dir2 && STEP == 8) continue;
             if(extenstion || is_dir2) {
               size_t len = strlen(file->d_name);
               if (file->d_type == 2) {
@@ -2079,7 +2180,7 @@
 
           /* Sort alphabetically — for Neo Geo, sort by display name */
           if (SORTED_COUNT > 1) {
-            if (STEP == 17) {
+            if (STEP == 8) {
               /* Ensure name table is loaded */
               if (ng_names_count < 0) ng_load_names();
               if (ng_names_count > 0) {
@@ -2218,7 +2319,7 @@
     //printf("\nlimit:%d", limit);
     for(int n = 0; n < limit; n++) {
       //printf("\n%d:%s", n, FILES[n]);
-      const char *label = (STEP == 17) ? ng_display_name(FILES[n]) : NULL;
+      const char *label = (STEP == 8) ? ng_display_name(FILES[n]) : NULL;
       bool use_ext = true;
       if (label) { use_ext = false; } else { label = FILES[n]; }
       draw_text(x+48,y,(char*)label,use_ext,n == 0 ? true : false, false);
@@ -4349,6 +4450,18 @@
       esp_err_t err = psram_app_load(rom_path, &papp);
 
       if (err != ESP_OK) {
+        {   /* show why the load failed, since there is no serial log on this board */
+          char m1[64], m2[64];
+          snprintf(m1, sizeof(m1), "PAPP LOAD FAILED 0x%X", (unsigned)err);
+          snprintf(m2, sizeof(m2), "INT %uK PSRAM BLK %uK",
+                   (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+                   (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
+          clear_screen();
+          draw_text(40, 180, m1, false, true, false);
+          draw_text(40, 230, m2, false, false, false);
+          display_flush();
+          vTaskDelay(pdMS_TO_TICKS(4000));
+        }
         serial_upload_init();
         get_restore_states();
         LAUNCHER = false;
@@ -4680,7 +4793,7 @@
       }
 
       /* Draw filename (without extension) — use display name for Neo Geo */
-      const char *label = (STEP == 17) ? ng_display_name(FILES[n]) : NULL;
+      const char *label = (STEP == 8) ? ng_display_name(FILES[n]) : NULL;
       bool use_ext = true;
       if (label) { use_ext = false; } else { label = FILES[n]; }
       draw_text(x + 40, y + 6, (char*)label, use_ext, selected, false);
@@ -4759,7 +4872,7 @@
     }
 
     /* Draw filename — use display name for Neo Geo */
-    const char *label = (STEP == 17) ? ng_display_name(FILES[n]) : NULL;
+    const char *label = (STEP == 8) ? ng_display_name(FILES[n]) : NULL;
     bool use_ext = true;
     if (label) { use_ext = false; } else { label = FILES[n]; }
     draw_text(x + 40, y + 6, (char*)label, use_ext, selected, false);
@@ -4960,7 +5073,7 @@
         if (gamepad.values[ODROID_INPUT_UP]) {
           if (STEP == 0) {
             SETTING--;
-            if (SETTING < 0) SETTING = 3;
+            if (SETTING < 0) SETTING = 4;
             draw_settings();
           }
           usleep(200000);
@@ -4969,7 +5082,7 @@
         if (gamepad.values[ODROID_INPUT_DOWN]) {
           if (STEP == 0) {
             SETTING++;
-            if (SETTING > 3) SETTING = 0;
+            if (SETTING > 4) SETTING = 0;
             draw_settings();
           }
           usleep(200000);
@@ -4983,8 +5096,13 @@
             }
             if (SETTING == 3) {
               run_map_controller_wizard();
-              draw_background();
-              draw_settings();
+              restore_layout();   /* redraws background, systems carousel, title and settings */
+              display_flush();
+            }
+            if (SETTING == 4) {
+              run_bt_pads_screen();
+              restore_layout();
+              display_flush();
             }
           } else if (STEP >= 3) {
             /* Enter ROM browser for emulator systems */
@@ -5013,6 +5131,12 @@
 
         /* --- B: no action in carousel mode --- */
         if (gamepad.values[ODROID_INPUT_B]) {
+          /* B on the settings screen leaves it (next system), so touch users can exit */
+          if (STEP == 0) {
+            STEP++;
+            ROMS.offset = 0;
+            animate(1);
+          }
           debounce(ODROID_INPUT_B);
         }
 

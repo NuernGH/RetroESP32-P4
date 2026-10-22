@@ -39,13 +39,6 @@ echo Launcher (HDMI): OK
 REM === Build Emulator Apps (HDMI) ===
 call :build_app nes        apps\nes        nes_app.bin
 call :build_app gb         apps\gb         gb_app.bin
-call :build_app sms        apps\sms        sms_app.bin
-call :build_app spectrum   apps\spectrum   spectrum_app.bin
-call :build_app stella     apps\stella     stella_app.bin
-call :build_app prosystem  apps\prosystem  prosystem_app.bin
-call :build_app handy      apps\handy      handy_app.bin
-call :build_app pce        apps\pce        pce_app.bin
-call :build_app atari800   apps\atari800   atari800_app.bin
 call :build_app snes       apps\snes       snes_app.bin
 call :build_app genesis    apps\genesis    genesis_app.bin
 call :build_app neogeo     apps\neogeo     neogeo_app.bin

@@ -136,6 +136,15 @@ int gamepad_get_raw_report(uint8_t *buf, size_t buf_size);
  */
 void gamepad_get_vid_pid(uint16_t *vid, uint16_t *pid);
 
+/** Pseudo VID used for Bluetooth pads (PID = hash of the pad address). */
+#define GAMEPAD_BT_VID  0x0B70
+
+/**
+ * @brief Publish the state of a Bluetooth pad (used while no USB pad is connected).
+ * @param st  New state, or NULL when the pad disconnects
+ */
+void gamepad_bt_set(const gamepad_state_t *st, uint16_t vid, uint16_t pid);
+
 #ifdef __cplusplus
 }
 #endif

@@ -623,7 +623,15 @@ static void show_volume_overlay(void)
 
 /* Show the in-game menu. Returns true if emulation should continue,
    false if DoQuit was called and we should exit. */
+static bool show_ingame_menu_inner(void);
 static bool show_ingame_menu(void)
+{
+    odroid_input_touch_nav_enter();
+    bool r = show_ingame_menu_inner();
+    odroid_input_touch_nav_leave();
+    return r;
+}
+static bool show_ingame_menu_inner(void)
 {
     uint16_t *fb = display_get_emu_buffer();
     if (!fb) return true;

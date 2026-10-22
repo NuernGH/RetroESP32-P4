@@ -539,7 +539,15 @@ static void neo_show_volume(void)
     }
 }
 
+static bool neo_show_menu_inner(void);
 static bool neo_show_menu(void)
+{
+    odroid_input_touch_nav_enter();
+    bool r = neo_show_menu_inner();
+    odroid_input_touch_nav_leave();
+    return r;
+}
+static bool neo_show_menu_inner(void)
 {
     if (!lcd_fb) return false;
 

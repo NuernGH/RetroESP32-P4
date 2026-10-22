@@ -111,6 +111,16 @@ extern bool odroid_input_xy_menu_disable;
 extern bool odroid_input_touch_buttons_disable;
 
 /**
+ * @brief When true, the touch panel acts as a navigation pad (launcher only):
+ *        swipe = D-pad, tap = A, long press = B. The MENU/VOLUME corner
+ *        zones are disabled while this is on.
+ */
+extern bool odroid_input_touch_nav;
+uint32_t odroid_input_touch_last_tap(int *x, int *y);
+void odroid_input_touch_nav_enter(void);
+void odroid_input_touch_nav_leave(void);
+
+/**
  * @brief Initialise the ADC for the analog paddle on GPIO 52 (ADC2_CH3).
  * Call once before reading odroid_paddle_adc_raw.
  */
