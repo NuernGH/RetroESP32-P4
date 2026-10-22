@@ -17,6 +17,9 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "gamepad.h"
+#include <dirent.h>
+#include <sys/stat.h>
+#include <stdlib.h>
 
 void ble_store_config_init(void);
 #define MAX_DEVS        24
@@ -185,6 +188,108 @@ static bool load_target(void)
     return ok;
 }
 
+
+/* ---------------- Pairing backup on the SD card ----------------
+ * A full flash wipes NVS (bonds + remembered pad). Mirror the "btpad" and "nimble_bond" NVS
+ * namespaces to /sd/odroid/btpad.bak after each pairing and restore them at start-up when
+ * NVS has no remembered pad, so the pad survives re-flashing. File: repeated records of
+ * [ns u8 len][ns][key u8 len][key][len u32][blob bytes]. */
+#define BAK_PATH "/sd/odroid/btpad.bak"
+static const char *const BAK_NS[] = { "btpad", "nimble_bond" };
+
+static bool sd_ready(void)
+{
+    DIR *d = opendir("/sd");
+    if (!d) return false;
+    closedir(d);
+    return true;
+}
+
+static void bak_write_all(void)
+{
+    if (!sd_ready()) return;
+    mkdir("/sd/odroid", 0777);
+    FILE *f = fopen(BAK_PATH ".tmp", "wb");
+    if (!f) return;
+    int nrec = 0;
+    for (size_t i = 0; i < sizeof(BAK_NS) / sizeof(BAK_NS[0]); i++) {
+        nvs_iterator_t it = NULL;
+        if (nvs_entry_find(NVS_DEFAULT_PART_NAME, BAK_NS[i], NVS_TYPE_BLOB, &it) != ESP_OK) continue;
+        while (it) {
+            nvs_entry_info_t info;
+            nvs_entry_info(it, &info);
+            nvs_handle_t h;
+            size_t len = 0;
+            if (nvs_open(BAK_NS[i], NVS_READONLY, &h) == ESP_OK) {
+                if (nvs_get_blob(h, info.key, NULL, &len) == ESP_OK && len > 0 && len < 4096) {
+                    uint8_t *buf = malloc(len);
+                    if (buf && nvs_get_blob(h, info.key, buf, &len) == ESP_OK) {
+                        uint8_t nl = (uint8_t)strlen(BAK_NS[i]), kl = (uint8_t)strlen(info.key);
+                        uint32_t l32 = (uint32_t)len;
+                        fwrite(&nl, 1, 1, f); fwrite(BAK_NS[i], 1, nl, f);
+                        fwrite(&kl, 1, 1, f); fwrite(info.key, 1, kl, f);
+                        fwrite(&l32, 4, 1, f); fwrite(buf, 1, len, f);
+                        nrec++;
+                    }
+                    free(buf);
+                }
+                nvs_close(h);
+            }
+            if (nvs_entry_next(&it) != ESP_OK) break;
+        }
+        nvs_release_iterator(it);
+    }
+    fclose(f);
+    if (nrec > 0) {
+        remove(BAK_PATH);
+        rename(BAK_PATH ".tmp", BAK_PATH);
+    } else {
+        remove(BAK_PATH ".tmp");
+    }
+    ESP_LOGI(TAG, "pairing backed up to SD (%d records)", nrec);
+}
+
+static void bak_restore(void)
+{
+    FILE *f = fopen(BAK_PATH, "rb");
+    if (!f) return;
+    int nrec = 0;
+    for (;;) {
+        uint8_t nl, kl; char ns[24], key[24]; uint32_t l32;
+        if (fread(&nl, 1, 1, f) != 1 || nl == 0 || nl >= sizeof(ns)) break;
+        if (fread(ns, 1, nl, f) != nl) break;
+        ns[nl] = 0;
+        if (fread(&kl, 1, 1, f) != 1 || kl == 0 || kl >= sizeof(key)) break;
+        if (fread(key, 1, kl, f) != kl) break;
+        key[kl] = 0;
+        if (fread(&l32, 4, 1, f) != 1 || l32 == 0 || l32 >= 4096) break;
+        uint8_t *buf = malloc(l32);
+        if (!buf || fread(buf, 1, l32, f) != l32) { free(buf); break; }
+        nvs_handle_t h;
+        if (nvs_open(ns, NVS_READWRITE, &h) == ESP_OK) {
+            if (nvs_set_blob(h, key, buf, l32) == ESP_OK) { nvs_commit(h); nrec++; }
+            nvs_close(h);
+        }
+        free(buf);
+    }
+    fclose(f);
+    ESP_LOGI(TAG, "pairing restored from SD (%d records)", nrec);
+}
+
+static void bak_task(void *arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(3000));   /* let NimBLE finish writing its keys */
+    bak_write_all();
+    vTaskDelete(NULL);
+}
+
+static void bak_schedule(void)
+{
+    xTaskCreate(bak_task, "bt_pad_bak", 4096, NULL, 3, NULL);
+}
+
+static void bak_delete(void) { remove(BAK_PATH); }
+
 void bt_pad_forget(void)
 {
     nvs_handle_t h;
@@ -197,6 +302,7 @@ void bt_pad_forget(void)
     if (s_connecting) ble_gap_conn_cancel();
     if (s_connected) ble_gap_terminate(s_conn, BLE_ERR_REM_USER_CONN_TERM);
     ble_store_clear();
+    bak_delete();
     set_status("saved pad forgotten");
 }
 
@@ -562,6 +668,7 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
             set_status("paired, reading %s...", s_pad_name);
             s_have_target = true;
             save_target();
+            bak_schedule();
             s_step = 0;
             gatt_next();
         } else {
@@ -714,6 +821,13 @@ static void start_task(void *arg)
     if (nerr == ESP_ERR_NVS_NO_FREE_PAGES || nerr == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase();
         nvs_flash_init();
+    }
+    {   /* NVS was wiped by a flash? bring the pairing back from the SD card (wait for the card) */
+        s_target.addr_type = 0;
+        if (!load_target()) {
+            for (int i = 0; i < 30 && !sd_ready(); i++) vTaskDelay(pdMS_TO_TICKS(200));
+            bak_restore();
+        }
     }
     set_status("linking to C6 radio...");
     if (esp_hosted_connect_to_slave() != 0) {

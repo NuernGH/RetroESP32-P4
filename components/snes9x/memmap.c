@@ -271,9 +271,11 @@ bool S9xInitMemory(void)
    if (!Memory.RAM)
       Memory.RAM = (uint8_t*) heap_caps_calloc(1, RAM_SIZE, MALLOC_CAP_SPIRAM);
    Memory.SRAM  = (uint8_t*) heap_caps_calloc(1, SRAM_SIZE, MALLOC_CAP_SPIRAM);  // 128 KB battery save (cold)
-   Memory.VRAM  = (uint8_t*) heap_caps_calloc(1, VRAM_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);  // 64 KB (hot, render)
+   /* VRAM goes to PSRAM now: the Bluetooth pad stack needs ~60 KB of internal RAM next to the
+    * emulator, and with VRAM internal only ~12 KB was left (NimBLE failed to start in-game). */
+   Memory.VRAM  = (uint8_t*) heap_caps_calloc(1, VRAM_SIZE, MALLOC_CAP_SPIRAM);
    if (!Memory.VRAM)
-      Memory.VRAM = (uint8_t*) heap_caps_calloc(1, VRAM_SIZE, MALLOC_CAP_SPIRAM);
+      Memory.VRAM = (uint8_t*) heap_caps_calloc(1, VRAM_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
    printf("SNES MEM: RAM=%p VRAM=%p SRAM=%p (P4 internal SRAM ~0x4FFxxxxx, PSRAM 0x48xxxxxx)\n",
           Memory.RAM, Memory.VRAM, Memory.SRAM);
 // allocated when actually loading the ROM
