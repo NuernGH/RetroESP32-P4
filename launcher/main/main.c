@@ -64,7 +64,7 @@
 
 //{#pragma region Emulator and Directories
   char EMULATORS[COUNT][30] = {
-    "SETTINGS (BT18)",
+    "SETTINGS (BT26)",
     "FAVORITES",
     "RECENTLY PLAYED",
     "NINTENDO ENTERTAINMENT SYSTEM",
@@ -112,6 +112,7 @@
 
 //{#pragma region Buffer
   unsigned short buffer[64000];
+  #define GUI_BT_BG 0x10A2   /* dark slate for the Bluetooth screen */
 //}#pragma endregion Buffer
 
 //{#pragma region PAPP Preview
@@ -973,24 +974,67 @@
   }
 
   /* ─── BLUETOOTH PADS screen ─────────────────────────────────────── */
+  /* ---- small drawing helpers for the Bluetooth screen (RGB565, opaque) ---- */
+  static void ui_fill(int x, int y, int w, int h, uint16_t c) {
+    if (w <= 0 || h <= 0) return;
+    int rows = 64000 / w; if (rows > h) rows = h; if (rows < 1) rows = 1;
+    for (int i = 0; i < w * rows; i++) buffer[i] = c;
+    for (int yy = 0; yy < h; yy += rows) {
+      int rh = (h - yy < rows) ? (h - yy) : rows;
+      ili9341_write_frame_rectangleLE(x, y + yy, w, rh, buffer);
+    }
+  }
+  /* rounded-ish card: chamfered corners */
+  static void ui_card(int x, int y, int w, int h, uint16_t c, uint16_t edge) {
+    ui_fill(x, y, w, h, edge);                       /* 2px outline in the edge colour */
+    ui_fill(x + 2, y + 2, w - 4, h - 4, c);
+    ui_fill(x, y, 4, 4, GUI_BT_BG); ui_fill(x + w - 4, y, 4, 4, GUI_BT_BG);
+    ui_fill(x, y + h - 4, 4, 4, GUI_BT_BG); ui_fill(x + w - 4, y + h - 4, 4, 4, GUI_BT_BG);
+  }
+  static void ui_text(int x, int y, const char *str, uint16_t fg, uint16_t bg) {
+    int n = (int)strlen(str);
+    for (int k = 0; k < n; k++) {
+      char ch = str[k];
+      int glyph = (ch >= 32 && ch <= 126) ? ch - 32 : '?' - 32;
+      int i = 0;
+      for (int row = 0; row < 16; row++) {
+        uint8_t bits = FONT_8x16[glyph][row];
+        for (int sr = 0; sr < 2; sr++)
+          for (int col = 7; col >= 0; col--) {
+            uint16_t px = (bits & (1 << col)) ? fg : bg;
+            buffer[i++] = px; buffer[i++] = px;
+          }
+      }
+      ili9341_write_frame_rectangleLE(x, y, 16, 32, buffer);
+      x += 18;
+    }
+  }
+  static int ui_text_w(const char *s) { return (int)strlen(s) * 18; }
+
+  typedef struct { int x, y, w, h; int kind; int idx; bool enabled; } bt_hit_t;
+  enum { BTH_PAIR, BTH_RECONNECT, BTH_FORGET, BTH_BACK, BTH_DEV };
+
   void run_bt_pads_screen(void)
   {
     bt_pad_start();   /* no-op when already running */
 
     bt_pad_dev_t devs[8];
-    int count = 0, sel = 0;       /* sel 0 = SCAN row, 1..count = devices */
+    int count = 0, focus = 0;
     bool dirty = true;
     char last_status[64] = "";
-    bool last_scanning = false;
+    bool last_scanning = false, last_conn = false, confirm_forget = false;
     int tx0, ty0;
     uint32_t last_tap_seq = odroid_input_touch_last_tap(&tx0, &ty0);
+    bt_hit_t hits[16]; int nhits = 0;
+    const int SW = WIDTH;
 
     while (true) {
       bt_pad_state_t st = bt_pad_state();
       bool scanning = bt_pad_scanning();
-      if (strcmp(last_status, bt_pad_status_text()) != 0 || scanning != last_scanning) {
+      bool conn = bt_pad_connected();
+      if (strcmp(last_status, bt_pad_status_text()) != 0 || scanning != last_scanning || conn != last_conn) {
         strlcpy(last_status, bt_pad_status_text(), sizeof(last_status));
-        last_scanning = scanning; dirty = true;
+        last_scanning = scanning; last_conn = conn; dirty = true;
       }
       if (scanning) {
         static int64_t last_refresh = 0;
@@ -998,35 +1042,98 @@
         if (nowus - last_refresh > 500000) {
           last_refresh = nowus;
           count = bt_pad_get_devices(devs, 8);
+          if (count > 5) count = 5;
           dirty = true;
         }
       }
-      if (bt_pad_connected()) {   /* live view of what the pad sends */
+      if (conn) {   /* live view of what the pad sends */
         static int64_t last_dbg = 0;
         int64_t nowus = esp_timer_get_time();
-        if (nowus - last_dbg > 200000) { last_dbg = nowus; dirty = true; }
+        if (nowus - last_dbg > 300000) { last_dbg = nowus; dirty = true; }
       }
-      if (sel > count) sel = count;
+
       if (dirty) {
-        clear_screen();
-        draw_text(40, 20, (char *)"BLUETOOTH PADS", false, true, false);
-        draw_text(40, 70, (char *)bt_pad_status_text(), false, false, false);
-        if (bt_pad_connected()) {
-          draw_text(40, 395, (char *)bt_pad_debug_text(), false, false, false);
-          gamepad_state_t g; gamepad_get_state(&g);
-          char gl[48];
-          snprintf(gl, sizeof(gl), "btn %04X dpad %X lx %d ly %d", (unsigned)g.buttons, g.dpad, g.axis_lx, g.axis_ly);
-          draw_text(40, 418, gl, false, false, false);
+        const uint16_t CARD = 0x2965, EDGE = 0x4A49, ACC = 0x041F, GRN = 0x07E0, RED = 0xF800,
+                       DIM = 0x8C71, TXT = 0xFFFF, OFF = 0x39E7;
+        bool ready = (st == BT_PAD_READY);
+        bool saved = bt_pad_has_saved();
+        nhits = 0;
+        ui_fill(0, 0, SW, 480, GUI_BT_BG);
+
+        /* header */
+        ui_text(30, 18, "BLUETOOTH PADS", TXT, GUI_BT_BG);
+        {
+          const char *chip = conn ? "CONNECTED" : scanning ? "SCANNING" : ready ? "READY" : "STARTING";
+          uint16_t cc = conn ? GRN : scanning ? ACC : DIM;
+          int cw = ui_text_w(chip) + 36;
+          ui_card(SW - cw - 30, 12, cw, 44, CARD, cc);
+          ui_fill(SW - cw - 30 + 12, 29, 10, 10, cc);
+          ui_text(SW - cw - 30 + 30, 18, chip, cc, CARD);
         }
-        if (st == BT_PAD_READY) {
-          draw_text(40, 120, scanning ? (char *)"SCANNING..." : (char *)"SCAN", false, sel == 0, false);
-          for (int i = 0; i < count; i++) {
-            char line[40];
-            snprintf(line, sizeof(line), "%s%s", devs[i].hid ? "* " : "  ", devs[i].name[0] ? devs[i].name : "(no name)");
-            draw_text(40, 170 + i * 40, line, false, sel == i + 1, false);
+        ui_fill(30, 62, SW - 60, 2, EDGE);
+
+        /* left column: paired pad + nearby devices */
+        int lx = 30, lw = 480, y = 80;
+        ui_text(lx, y, "PAIRED PAD", DIM, GUI_BT_BG); y += 38;
+        ui_card(lx, y, lw, 72, CARD, EDGE);
+        if (saved) {
+          char nm[26]; snprintf(nm, sizeof(nm), "%.24s", bt_pad_saved_name());
+          ui_fill(lx + 18, y + 30, 14, 14, conn ? GRN : DIM);
+          ui_text(lx + 46, y + 8, nm, TXT, CARD);
+          ui_text(lx + 46, y + 38, conn ? "connected" : "saved - waiting for pad", conn ? GRN : DIM, CARD);
+        } else {
+          ui_text(lx + 18, y + 20, "no pad paired yet", DIM, CARD);
+        }
+        y += 72 + 22;
+        ui_text(lx, y, scanning ? "NEARBY (SCANNING...)" : "NEARBY", DIM, GUI_BT_BG); y += 38;
+        if (!ready) {
+          ui_text(lx, y, bt_pad_status_text(), DIM, GUI_BT_BG);
+        } else if (count == 0) {
+          ui_text(lx, y, scanning ? "looking for pads..." : "press PAIR NEW PAD to scan", DIM, GUI_BT_BG);
+        }
+        for (int i = 0; ready && i < count; i++) {
+          bt_hit_t *h = &hits[nhits++]; h->x = lx; h->y = y; h->w = lw; h->h = 52; h->kind = BTH_DEV; h->idx = i; h->enabled = true;
+          y += 58;
+        }
+
+        /* right column: buttons */
+        int bx = 560, bw = SW - bx - 30, by = 90;
+        struct { const char *label; int kind; bool en; uint16_t col; } btn[] = {
+          { scanning ? "SCANNING..." : "PAIR NEW PAD", BTH_PAIR, ready && !scanning, ACC },
+          { "RECONNECT", BTH_RECONNECT, ready && saved && !conn, ACC },
+          { confirm_forget ? "TAP AGAIN: FORGET" : "FORGET PAD", BTH_FORGET, ready && saved, RED },
+          { "BACK", BTH_BACK, true, DIM },
+        };
+        for (int i = 0; i < 4; i++) {
+          bt_hit_t *h = &hits[nhits++]; h->x = bx; h->y = by + i * 84; h->w = bw; h->h = 68; h->kind = btn[i].kind; h->idx = i; h->enabled = btn[i].en;
+        }
+        /* draw everything now that hit rects are known; focus ring on the focused one */
+        if (focus >= nhits) focus = nhits - 1;
+        for (int i = 0; i < nhits; i++) {
+          bt_hit_t *h = &hits[i];
+          bool f = (i == focus);
+          if (h->kind == BTH_DEV) {
+            char line[34]; const bt_pad_dev_t *d = &devs[h->idx];
+            snprintf(line, sizeof(line), "%.24s", d->name[0] ? d->name : "(no name)");
+            ui_card(h->x, h->y, h->w, h->h, CARD, f ? ACC : EDGE);
+            ui_text(h->x + 16, h->y + 10, line, d->hid ? TXT : DIM, CARD);
+            const char *tag = d->hid ? "PAD" : "";
+            if (tag[0]) ui_text(h->x + h->w - ui_text_w(tag) - 16, h->y + 10, tag, GRN, CARD);
+          } else {
+            int bi = h->kind == BTH_PAIR ? 0 : h->kind == BTH_RECONNECT ? 1 : h->kind == BTH_FORGET ? 2 : 3;
+            uint16_t col = h->enabled ? btn[bi].col : OFF;
+            ui_card(h->x, h->y, h->w, h->h, h->enabled ? col : CARD, f ? TXT : (h->enabled ? col : EDGE));
+            const char *lb = btn[bi].label;
+            ui_text(h->x + (h->w - ui_text_w(lb)) / 2, h->y + 18, lb, h->enabled ? TXT : OFF, h->enabled ? col : CARD);
           }
         }
-        draw_text(40, 440, (char *)"TAP: SELECT  HOLD: BACK  * = PAD", false, false, false);
+        if (conn) {
+          char gl[64]; gamepad_state_t g; gamepad_get_state(&g);
+          snprintf(gl, sizeof(gl), "btn %04X dpad %X lx %d ly %d", (unsigned)g.buttons, g.dpad, g.axis_lx, g.axis_ly);
+          ui_text(30, 430, gl, DIM, GUI_BT_BG);
+        } else {
+          ui_text(30, 430, bt_pad_status_text(), DIM, GUI_BT_BG);
+        }
         display_flush();
         dirty = false;
       }
@@ -1034,39 +1141,36 @@
       odroid_gamepad_state gp;
       odroid_input_gamepad_read(&gp);
       if (gp.values[ODROID_INPUT_B]) {
-        do {
-          vTaskDelay(pdMS_TO_TICKS(10));
-          odroid_input_gamepad_read(&gp);
-        } while (gp.values[ODROID_INPUT_B]);
+        do { vTaskDelay(pdMS_TO_TICKS(10)); odroid_input_gamepad_read(&gp); } while (gp.values[ODROID_INPUT_B]);
         break;
       }
 
-      /* A tap on a row selects and activates it directly */
-      int tx, ty;
+      /* tap hits a card or button directly */
+      int tx, ty, act = -1;
       uint32_t tseq = odroid_input_touch_last_tap(&tx, &ty);
-      bool activate = false;
       if (tseq != last_tap_seq) {
         last_tap_seq = tseq;
-        if (ty >= 105 && ty < 165) { sel = 0; activate = true; }
-        else if (ty >= 165) {
-          int row = (ty - 165) / 40;
-          if (row < count) { sel = row + 1; activate = true; }
+        for (int i = 0; i < nhits; i++)
+          if (tx >= hits[i].x && tx < hits[i].x + hits[i].w && ty >= hits[i].y && ty < hits[i].y + hits[i].h) { focus = i; act = i; break; }
+        dirty = true;
+      }
+      if (gp.values[ODROID_INPUT_A]) act = focus;
+      if (act >= 0 && act < nhits && hits[act].enabled) {
+        switch (hits[act].kind) {
+          case BTH_PAIR:      confirm_forget = false; if (!scanning) bt_pad_scan(); break;
+          case BTH_RECONNECT: confirm_forget = false; bt_pad_reconnect(); break;
+          case BTH_FORGET:
+            if (confirm_forget) { bt_pad_forget(); confirm_forget = false; }
+            else confirm_forget = true;
+            break;
+          case BTH_BACK:      return;
+          case BTH_DEV:       confirm_forget = false; if (hits[act].idx < count) bt_pad_connect(&devs[hits[act].idx]); break;
         }
+        do { vTaskDelay(pdMS_TO_TICKS(10)); odroid_input_gamepad_read(&gp); } while (gp.values[ODROID_INPUT_A]);
         dirty = true;
       }
-      if (gp.values[ODROID_INPUT_A]) activate = true;
-      if (activate && st == BT_PAD_READY && !scanning) {
-        if (sel == 0) bt_pad_scan();
-        else if (sel <= count) bt_pad_connect(&devs[sel - 1]);
-        /* let the touch pulse for A finish so it does not fire twice */
-        do {
-          vTaskDelay(pdMS_TO_TICKS(10));
-          odroid_input_gamepad_read(&gp);
-        } while (gp.values[ODROID_INPUT_A]);
-        dirty = true;
-      }
-      if (gp.values[ODROID_INPUT_DOWN]) { sel = sel < count ? sel + 1 : 0; dirty = true; usleep(200000); }
-      if (gp.values[ODROID_INPUT_UP])   { sel = sel > 0 ? sel - 1 : count; dirty = true; usleep(200000); }
+      if (gp.values[ODROID_INPUT_DOWN]) { focus = focus + 1 < nhits ? focus + 1 : 0; dirty = true; usleep(200000); }
+      if (gp.values[ODROID_INPUT_UP])   { focus = focus > 0 ? focus - 1 : nhits - 1; dirty = true; usleep(200000); }
       vTaskDelay(pdMS_TO_TICKS(30));
     }
   }

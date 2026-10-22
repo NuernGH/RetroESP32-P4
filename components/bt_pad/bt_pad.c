@@ -669,6 +669,13 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
             s_have_target = true;
             save_target();
             bak_schedule();
+            {   /* ask for the shortest connection interval: lower input latency in games */
+                struct ble_gap_upd_params up = {
+                    .itvl_min = 6, .itvl_max = 12, .latency = 0, .supervision_timeout = 400,
+                    .min_ce_len = 0, .max_ce_len = 0,
+                };
+                ble_gap_update_params(ev->enc_change.conn_handle, &up);
+            }
             s_step = 0;
             gatt_next();
         } else {
@@ -758,6 +765,14 @@ void bt_pad_connect(const bt_pad_dev_t *dev)
 }
 
 bool bt_pad_connected(void) { return s_connected; }
+bool bt_pad_has_saved(void) { return s_have_target || load_target() ? (s_have_target = true) : false; }
+const char *bt_pad_saved_name(void) { return s_target.name[0] ? s_target.name : s_pad_name; }
+void bt_pad_reconnect(void)
+{
+    if (!s_have_target || s_connected || !s_synced) return;
+    bt_pad_dev_t d = s_target;
+    bt_pad_connect(&d);
+}
 const char *bt_pad_pad_name(void) { return s_pad_name; }
 
 void bt_pad_scan(void)

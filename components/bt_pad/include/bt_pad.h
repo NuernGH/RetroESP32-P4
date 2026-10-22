@@ -47,6 +47,11 @@ bool bt_pad_connected(void);
 const char *bt_pad_pad_name(void);
 /** Last raw notification (hex) for diagnostics. */
 const char *bt_pad_debug_text(void);
+/** Saved (paired) pad: remembered name and whether one exists. */
+bool bt_pad_has_saved(void);
+const char *bt_pad_saved_name(void);
+/** Reconnect to the saved pad (no-op when none or already connected). */
+void bt_pad_reconnect(void);
 /** Forget the saved pad and its bond. */
 void bt_pad_forget(void);
 
