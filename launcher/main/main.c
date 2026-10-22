@@ -4575,6 +4575,8 @@
       }
 
       /* Run the PSRAM app â€” blocks until it returns */
+      odroid_trail("papp free %uK big %uK", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA) / 1024),
+                   (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA) / 1024));
       int result = psram_app_run(papp);
       (void)result;
 
