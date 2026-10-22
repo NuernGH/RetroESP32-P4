@@ -13,8 +13,8 @@
 /* Touch I2C Pins */
 #define TP_I2C_SDA  7
 #define TP_I2C_SCL  8
-#define TP_RST      -1
-#define TP_INT      -1
+#define TP_RST      22   /* GPIO22 = TOUCH_RST (board schematic) */
+#define TP_INT      21   /* GPIO21 = TOUCH_INT (board schematic) */
 
 /* I2S / ES8311 Audio Codec Pins */
 #define I2S_MCLK_IO   13
