@@ -14,10 +14,11 @@ extern int32_t NoiseFreq[32];
 
 bool S9xInitAPU()
 {
-   /* 64 KB contiguous: prefer internal RAM, but BT + hosted leave it fragmented — fall back to PSRAM */
-   IAPU.RAM = (uint8_t*) heap_caps_malloc(0x10000, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+   /* 64 KB: PSRAM first — internal RAM is needed by the Bluetooth host and SD DMA buffers
+    * (the emulator used to leave only ~12 KB free). Fall back to internal if PSRAM is full. */
+   IAPU.RAM = (uint8_t*) heap_caps_malloc(0x10000, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
    if (!IAPU.RAM)
-      IAPU.RAM = (uint8_t*) heap_caps_malloc(0x10000, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      IAPU.RAM = (uint8_t*) heap_caps_malloc(0x10000, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 
    if (!IAPU.RAM)
    {
